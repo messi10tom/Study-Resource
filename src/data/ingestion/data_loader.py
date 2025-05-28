@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +32,8 @@ class DataLoader:
                  dir_path: Optional[Union[str, Path]] = None,
                  filetype: Optional[str] = ".pdf",
                  recursive: bool = False,
-                 max_workers: int = 4
+                 max_workers: int = 4,
+                 logger: Optional[logging.Logger] = None
                  ):
         """
         DataLoader configuration
@@ -40,6 +42,8 @@ class DataLoader:
             file_path: Path to a single file
             dir_path: Path to directory containing files
             filetype: File extension filter for directory loading
+            recursive: Used when 'dir_path' is used for recursively selecting files
+            max_workers: number of parallel workers for loading
         """
         self.file_path = Path(file_path) if file_path else None
         self.dir_path = Path(dir_path) if dir_path else None
@@ -47,6 +51,7 @@ class DataLoader:
         self.recursive = recursive
         self.filetype = filetype.lower() if filetype else "./pdf"
         self.max_workers = max_workers
+        self.logger = logger or self._setup_logger()
 
         self._errors = []
         self._loaded_documents = []
@@ -64,6 +69,20 @@ class DataLoader:
         if self.filetype not in self.SUPPORTED_EXTENSIONS:
             raise DataLoaderError(f"Unsupported filetpe: {self.filetype}")
 
+    def _setup_logger(self) -> logging.Logger:
+        """Default logger"""
+        logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                    '%(asctime)s -%(name)s - %(levelname)s - %(message)s'
+                    )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+
+        return logger
+
     def _get_loader_class(self, file_path: Path) -> type:
         """Get the appropriate loader class"""
         extension = file_path.suffix.lower()
@@ -80,6 +99,7 @@ class DataLoader:
 
 
         # Unknow filetype
+        self.logger.warning(f"Unknown  filetype {extension}, setting to 'TextLoader'")
         return TextLoader
 
     def _load_single_file(self, file_path:Path) -> List[Document]:
@@ -110,6 +130,8 @@ class DataLoader:
 
             documents.extend(loaded_docs)
 
+            self.logger.info(f"Successfully loaded {len(loaded_docs)} documents from {file_path}")
+
         except Exception as e:
             error_info = {
                     'file_path': str(file_path),
@@ -117,6 +139,7 @@ class DataLoader:
                     'timestamp': datetime.now().isoformat()
                     }
             self._errors.append(error_info)
+            self.logger.error(f"Failed to load {file_path}: {e}")
 
         return documents
 
