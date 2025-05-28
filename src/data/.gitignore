@@ -1,0 +1,6 @@
+# Raw data
+raw/
+
+# cache files/folders
+__pycache__/
+

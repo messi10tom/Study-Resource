@@ -1,0 +1,8 @@
+# Data
+/data/
+!/src/data/**
+
+# venv
+venv/
+
+
