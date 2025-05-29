@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
@@ -13,12 +14,44 @@ class CleanerError(Exception):
         super().__init__(message)
         self.details = details or {}
 
+@dataclass
+class CleaningStats:
+    """statistics for the cleaning operations"""
+    total_documents: int = 0
+    processed_documents:int = 0
+    failed_documents: int = 0
+    total_text_length_before: int = 0
+    total_text_length_after: int = 0
+    cleaning_duration_seconds: float = 0.0
+    operations_applied: List[str] = field(default_factory=list)
+    errors: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def compression_ratio(self) -> float:
+        """calculate text compression"""
+        if self.total_text_length_before == 0:
+            return 0.0
+        return 1.0 - (self.total_text_length_after / self.total_text_length_after)
+
+    @property
+    def sucess_rate(self) -> float:
+        """Calculates processing sucess rate"""
+        if self.total_documents == 0:
+            return 0.0
+        return self.processed_documents / self.total_documents
+
 class BaseCleaningOperation(ABC):
     """Abstract Base Class for cleaning operations"""
 
     @abstractmethod
     def apply(self, text: str) -> str:
         """Appy cleaning operation to text"""
+        pass
+
+    @property
+    @abstractmethod 
+    def name(self) -> str:
+        """Operation name for logging"""
         pass
 
 class WhitespaceNormalizer(BaseCleaningOperation):
@@ -39,23 +72,27 @@ class WhitespaceNormalizer(BaseCleaningOperation):
 
         return text.strip()
 
+    @property
+    def name(self) -> str:
+        return "WhitespaceNormalizer"
+
 class DataCleaner:
     """
     Data cleaner for the document processing pipeline
     """
     def __init__(self,
-                 logger: logging.Logger,
                  operations: Optional[List[BaseCleaningOperation]] = None,
                  max_workers: int = 4,
                  preserve_metadata: bool = True,
+                 logger: Optional[logging.Logger] = None
                  ):
 
         self.operations = operations or self._default_operations()
         self.max_workers = max_workers
-        self.logger = logger
+        self.logger = logger or self._default_logger()
         self.preserve_metadata = preserve_metadata
 
-        self._errors = []
+        self.stats = CleaningStats()
         # Validate operations
         self._validate_operations()
 
@@ -67,6 +104,18 @@ class DataCleaner:
         for op in self.operations:
             if not isinstance(op, BaseCleaningOperation):
                 raise CleanerError(f"Invalid cleaning operation type: {type(op)}")
+
+    def _default_logger(self) -> logging.Logger:
+        logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+                    )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+        return logger
 
     def _default_operations(self) -> List[BaseCleaningOperation]:
         """Get default cleaning operations"""
@@ -108,7 +157,7 @@ class DataCleaner:
                     'error': str(e),
                     'timestamp': datetime.now().isoformat()
                     }
-            self._errors.append(error_info)
+            self.stats.errors.append(error_info)
             raise CleanerError(f"Failed to clean document: {e}", error_info)
 
     def clean_documents(self, documents: List[Document]) -> List[Document]:
@@ -121,6 +170,10 @@ class DataCleaner:
             return []
 
         start_time = datetime.now()
+        self.stats.total_documents = len(documents)
+
+        self.stats.total_text_length_before = sum(len(doc.page_content) for doc in documents)
+
         cleaned_documents = []
 
         # Parallel processing
@@ -133,14 +186,17 @@ class DataCleaner:
                 try:
                     cleaned_doc = future.result()
                     cleaned_documents.append(cleaned_doc)
+                    self.stats.processed_documents += 1
                 except Exception as e:
+                    self.stats.failed_documents += 1
                     self.logger.error(f"Document cleaning failed: {e}")
 
         # Update statistics
         end_time = datetime.now()
-        
-        self.logger.info(f"Cleaning completed in: {(end_time - start_time).total_seconds()}")
+        self.stats.cleaning_duration_seconds = (end_time - start_time).total_seconds()
+        self.stats.total_text_length_after = sum(len(doc.page_content) for doc in cleaned_documents)
+        self.stats.operations_applied = [op.name for op in self.operations]
+
+        self.logger.info(f"Cleaning completed in: {self.stats.cleaning_duration_seconds} [{self.stats.processed_documents}/{self.stats.total_documents}")
+
         return cleaned_documents
-    
-    def get_errors(self):
-        return self._errors
